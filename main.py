@@ -20,7 +20,7 @@ class Point:
         self.velocity = pygame.Vector2(0, 0)
         self.acceleration = pygame.Vector2(0, 0)
 
-        self.radius = 5
+        self.radius = radius
 
     def apply_force(self, force):
         self.acceleration += force
@@ -28,7 +28,13 @@ class Point:
     def update(self, dt):
         self.velocity += self.acceleration * dt
         self.position += self.velocity * dt
-        self.acceleration *= 0 
+        self.acceleration *= 0
+
+    def solve_floor_collision(self):
+        if self.position.y + self.radius > FLOOR_Y:
+            self.position.y = FLOOR_Y - self.radius
+            self.velocity.y *= -0.8
+            self.velocity.x *= 0.9
         
 
     def draw(self,screen):
@@ -47,14 +53,16 @@ def draw_world(screen):
     pygame.draw.line(screen, LINE_COLOR, (0, FLOOR_Y), (500, FLOOR_Y), 2)
 
 def main():
-    # SOME CODE FROM DEVELOPER(IGOR)
-    #ok
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     clock = pygame.time.Clock()
 
-    p = Point(100, 100, 8)
+    points = [
+        Point(230, 100, 5),
+        Point(260, 100, 5),
+        Point(245, 140, 5),
+    ]
 
     gravity_force = pygame.Vector2(0, 0.001)
     running = True
@@ -64,22 +72,15 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
         dt = clock.tick(FPS)
-        
-        p.update(dt)
-        p.apply_force(gravity_force)
         draw_world(screen)
-        p.draw(screen)
+        
+        for point in points:
+            point.apply_force(gravity_force)
+            point.update(dt)
+            point.solve_floor_collision()
+            point.draw(screen)
         
         pygame.display.update()
-
-        keys = pygame.key.get_pressed()
-
-        if keys[pygame.K_LEFT]:
-            p.apply_force(pygame.Vector2(0, 0))
-        if keys[pygame.K_RIGHT]:
-            p.apply_force(pygame.Vector2(0, 0))
-        if keys[pygame.K_UP]:
-            p.apply_force(pygame.Vector2(0, 0))
 
 
     pygame.quit()
