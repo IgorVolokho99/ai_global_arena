@@ -16,35 +16,26 @@ LINE_COLOR = (200, 200, 200)
 
 class Point:
     def __init__(self, x, y, radius):
-        self.x = x
-        self.y = y
-        self.radius = radius
-        
-        self.vx = 0
-        self.vy = 0
+        self.position = pygame.Vector2(x, y)
+        self.velocity = pygame.Vector2(0, 0)
+        self.acceleration = pygame.Vector2(0, 0)
 
-    def update(self):
+        self.radius = 5
 
-        acceleration_x = 0
-        self.vx += acceleration_x
-        self.x += self.vx
+    def apply_force(self, force):
+        self.acceleration += force
 
-        acceleration_y = 0.118
-        self.vy += acceleration_y
-        self.y += self.vy
-
-        if self.y + self.radius >= FLOOR_Y:
-            self.y = FLOOR_Y - self.radius
-            self.vy *= -0.80
-            
-        
+    def update(self, dt):
+        self.velocity += self.acceleration * dt
+        self.position += self.velocity * dt
+        self.acceleration *= 0 
         
 
     def draw(self,screen):
         pygame.draw.circle(
             screen,
             (240, 220, 120),
-            (self.x, self.y), self.radius
+            (self.position.x, self.position.y), self.radius
         )
             
 
@@ -65,32 +56,30 @@ def main():
 
     p = Point(100, 100, 8)
 
-
+    gravity_force = pygame.Vector2(0, 0.001)
     running = True
     while running:
         all_events = pygame.event.get()
         for event in all_events:
             if event.type == pygame.QUIT:
                 running = False
-
+        dt = clock.tick(FPS)
         
-        p.update()    
-                
+        p.update(dt)
+        p.apply_force(gravity_force)
         draw_world(screen)
         p.draw(screen)
         
-        dt = clock.tick(FPS)
-
         pygame.display.update()
 
         keys = pygame.key.get_pressed()
 
         if keys[pygame.K_LEFT]:
-            p.vx -= 0.1
+            p.apply_force(pygame.Vector2(0, 0))
         if keys[pygame.K_RIGHT]:
-            p.vx += 0.1
+            p.apply_force(pygame.Vector2(0, 0))
         if keys[pygame.K_UP]:
-            p.vy -= 0.1
+            p.apply_force(pygame.Vector2(0, 0))
 
 
     pygame.quit()
