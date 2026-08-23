@@ -43,7 +43,35 @@ class Point:
             (240, 220, 120),
             (self.position.x, self.position.y), self.radius
         )
-            
+
+
+class Bone:
+    def __init__(self, point_a, point_b, length):
+        self.point_a = point_a
+        self.point_b = point_b
+        self.length = length
+
+    def solve(self):
+        delta = self.point_b.position - self.point_a.position
+        distance = delta.length()
+
+        if distance == 0:
+            return
+
+        difference = (distance - self.length) / distance
+        correction = delta * 0.5 * difference
+
+        self.point_a.position += correction
+        self.point_b.position -= correction
+
+    def draw(self, screen):
+        pygame.draw.line(
+            screen,
+            (220, 220, 230),
+            self.point_a.position,
+            self.point_b.position,
+            4,
+        )
 
 def draw_world(screen):
     screen.fill(BACKGROUND_COLOR)
@@ -58,11 +86,19 @@ def main():
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     clock = pygame.time.Clock()
 
+    
+
+    p1 = Point(240, 100, 5)
+    p2 = Point(260, 140, 5)
     points = [
-        Point(230, 100, 5),
-        Point(260, 100, 5),
-        Point(245, 140, 5),
+        #Point(230, 100, 5),
+        #Point(260, 100, 5),
+        #Point(245, 140, 5),
+        p1,
+        p2,
     ]
+
+    bone = Bone(p1, p2, 50)
 
     gravity_force = pygame.Vector2(0, 0.001)
     running = True
@@ -72,12 +108,22 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
         dt = clock.tick(FPS)
-        draw_world(screen)
+        
         
         for point in points:
             point.apply_force(gravity_force)
             point.update(dt)
             point.solve_floor_collision()
+            point.draw(screen)
+
+        for _ in range(8):
+            bone.solve()
+        
+        for point in points:
+            point.solve_floor_collision()
+        draw_world(screen)
+        bone.draw(screen)
+        for point in points:
             point.draw(screen)
         
         pygame.display.update()
