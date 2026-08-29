@@ -89,6 +89,23 @@ def draw_world(screen):
         2,
     )
 
+class Ragdoll:
+    def __init__(self, x, y):
+        self.points = []
+        self.bones = []
+
+    def update(self, dt):
+        ...
+
+    def solve_constraints(self):
+        ...
+
+    def solve_collisions(self):
+        ...
+
+    def draw(self, screen):
+        ...
+
 
 def main():
     pygame.init()
