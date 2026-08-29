@@ -89,22 +89,6 @@ def draw_world(screen):
         2,
     )
 
-class Ragdoll:
-    def __init__(self, x, y):
-        self.points = []
-        self.bones = []
-
-    def update(self, dt):
-        ...
-
-    def solve_constraints(self):
-        ...
-
-    def solve_collisions(self):
-        ...
-
-    def draw(self, screen):
-        ...
 
 
 def main():
@@ -115,19 +99,53 @@ def main():
 
     clock = pygame.time.Clock()
 
-    head = Point(240, 100, 5)
+    head = Point(250, 100, 5)
     chest = Point(250, 150, 5)
     pelvis = Point(250, 210, 5)
+
+    left_elbow = Point(215, 165, 5)
+    left_hand = Point(190, 205, 5)
+
+    right_elbow = Point(285, 165, 5)
+    right_hand = Point(310, 205, 5)
+
+    left_knee = Point(225, 280, 5)
+    left_foot = Point(210, 350, 5)
+
+    right_knee = Point(275, 280, 5)
+    right_foot = Point(290, 350, 5)
 
     points = [
         head,
         chest,
         pelvis,
+
+        left_elbow,
+        left_hand,
+        right_elbow,
+        right_hand,
+
+        left_knee,
+        left_foot,
+        right_knee,
+        right_foot,
     ]
 
     bones = [
         Bone(head, chest, 50),
         Bone(chest, pelvis, 60),
+
+        Bone(chest, left_elbow, 45),
+        Bone(left_elbow, left_hand, 45),
+
+        Bone(chest, right_elbow, 45),
+        Bone(right_elbow, right_hand, 45),
+
+        Bone(pelvis, left_knee, 65),
+        Bone(left_knee, left_foot, 70),
+
+        Bone(pelvis, right_knee, 65),
+        Bone(right_knee, right_foot, 70),
     ]
 
     gravity_force = pygame.Vector2(0, 900)
