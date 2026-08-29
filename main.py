@@ -1,5 +1,4 @@
 import pygame
-import time
 
 SCREEN_WIDTH = 500
 SCREEN_HEIGHT = 500
@@ -9,10 +8,9 @@ FLOOR_Y = 450
 FPS = 60
 
 BACKGROUND_COLOR = (25, 30, 30)
-GREEN = (0, 255, 0)
 DARK_GREY = (60, 60, 70)
-
 LINE_COLOR = (200, 200, 200)
+
 
 class Point:
     def __init__(self, x, y, radius):
@@ -35,13 +33,13 @@ class Point:
             self.position.y = FLOOR_Y - self.radius
             self.velocity.y *= -0.8
             self.velocity.x *= 0.9
-        
 
-    def draw(self,screen):
+    def draw(self, screen):
         pygame.draw.circle(
             screen,
             (240, 220, 120),
-            (self.position.x, self.position.y), self.radius
+            (int(self.position.x), int(self.position.y)),
+            self.radius,
         )
 
 
@@ -73,62 +71,80 @@ class Bone:
             4,
         )
 
+
 def draw_world(screen):
     screen.fill(BACKGROUND_COLOR)
 
-    pygame.draw.rect(screen, DARK_GREY, pygame.Rect(0, 0, 500, FLOOR_Y))
+    pygame.draw.rect(
+        screen,
+        DARK_GREY,
+        pygame.Rect(0, FLOOR_Y, SCREEN_WIDTH, SCREEN_HEIGHT - FLOOR_Y),
+    )
 
-    pygame.draw.line(screen, LINE_COLOR, (0, FLOOR_Y), (500, FLOOR_Y), 2)
+    pygame.draw.line(
+        screen,
+        LINE_COLOR,
+        (0, FLOOR_Y),
+        (SCREEN_WIDTH, FLOOR_Y),
+        2,
+    )
+
 
 def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption("Stage 9: Simple Skeleton")
+
     clock = pygame.time.Clock()
 
-    
+    head = Point(240, 100, 5)
+    chest = Point(250, 150, 5)
+    pelvis = Point(250, 210, 5)
 
-    p1 = Point(240, 100, 5)
-    p2 = Point(260, 140, 5)
     points = [
-        #Point(230, 100, 5),
-        #Point(260, 100, 5),
-        #Point(245, 140, 5),
-        p1,
-        p2,
+        head,
+        chest,
+        pelvis,
     ]
 
-    bone = Bone(p1, p2, 50)
+    bones = [
+        Bone(head, chest, 50),
+        Bone(chest, pelvis, 60),
+    ]
 
-    gravity_force = pygame.Vector2(0, 0.001)
+    gravity_force = pygame.Vector2(0, 900)
+
     running = True
     while running:
-        all_events = pygame.event.get()
-        for event in all_events:
+        dt = clock.tick(FPS) / 1000
+
+        for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
-        dt = clock.tick(FPS)
-        
-        
+
         for point in points:
             point.apply_force(gravity_force)
             point.update(dt)
-            point.solve_floor_collision()
-            point.draw(screen)
 
         for _ in range(8):
-            bone.solve()
-        
+            for bone in bones:
+                bone.solve()
+
         for point in points:
             point.solve_floor_collision()
+
         draw_world(screen)
-        bone.draw(screen)
+
+        for bone in bones:
+            bone.draw(screen)
+
         for point in points:
             point.draw(screen)
-        
+
         pygame.display.update()
 
-
     pygame.quit()
+
 
 main()
