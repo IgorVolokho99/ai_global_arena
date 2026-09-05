@@ -34,6 +34,13 @@ MAX_EPISODE_SECONDS = 12
 FALL_CONFIRM_SECONDS = 0.5
 RESET_DELAY_SECONDS = 1.0
 
+EXPERIMENT_MODES = [
+    "no_control",
+    "keyboard_only",
+    "mouse_only",
+    "full_manual",
+]
+
 BACKGROUND_COLOR = (25, 30, 30)
 DARK_GREY = (60, 60, 70)
 LINE_COLOR = (200, 200, 200)
@@ -53,6 +60,7 @@ STANDING_TEXT_COLOR = (120, 255, 160)
 LOGGING_TEXT_COLOR = (255, 220, 120)
 EPISODE_TEXT_COLOR = (220, 180, 255)
 REWARD_TEXT_COLOR = (255, 210, 120)
+MODE_TEXT_COLOR = (180, 255, 220)
 
 
 class Point:
@@ -155,6 +163,27 @@ class Bone:
         )
 
 
+class ExperimentModeManager:
+    def __init__(self):
+        self.current_index = 3
+
+    @property
+    def current_mode(self):
+        return EXPERIMENT_MODES[self.current_index]
+
+    def cycle_mode(self):
+        self.current_index += 1
+
+        if self.current_index >= len(EXPERIMENT_MODES):
+            self.current_index = 0
+
+    def allows_mouse_control(self):
+        return self.current_mode in ("mouse_only", "full_manual")
+
+    def allows_keyboard_control(self):
+        return self.current_mode in ("keyboard_only", "full_manual")
+
+
 class RewardCalculator:
     def calculate_step_reward(self, metrics):
         if metrics["is_fallen"]:
@@ -217,7 +246,7 @@ class EpisodeManager:
         self.step_reward = step_reward
         self.episode_total_reward += step_reward
 
-    def update(self, dt, metrics):
+    def update(self, dt, metrics, experiment_mode):
         if self.is_episode_over:
             self.reset_delay_timer += dt
             return None
@@ -231,14 +260,14 @@ class EpisodeManager:
             self.time_alive += dt
 
         if self.fallen_time >= FALL_CONFIRM_SECONDS:
-            return self.end_episode("Fallen", metrics)
+            return self.end_episode("Fallen", metrics, experiment_mode)
 
         if self.episode_time >= MAX_EPISODE_SECONDS:
-            return self.end_episode("Time limit", metrics)
+            return self.end_episode("Time limit", metrics, experiment_mode)
 
         return None
 
-    def end_episode(self, reason, metrics):
+    def end_episode(self, reason, metrics, experiment_mode):
         self.is_episode_over = True
         self.reset_delay_timer = 0
         self.last_end_reason = reason
@@ -252,6 +281,7 @@ class EpisodeManager:
 
         self.last_summary = {
             "episode_number": self.episode_number,
+            "experiment_mode": experiment_mode,
             "end_reason": reason,
             "episode_time": round(self.episode_time, 3),
             "time_alive": round(self.time_alive, 3),
@@ -336,7 +366,15 @@ class FrameLogger:
         else:
             self.start(points)
 
-    def update(self, points, metrics, episode_manager, run_time, dt):
+    def update(
+        self,
+        points,
+        metrics,
+        episode_manager,
+        run_time,
+        dt,
+        experiment_mode,
+    ):
         if not self.is_logging:
             return
 
@@ -352,6 +390,7 @@ class FrameLogger:
             metrics,
             episode_manager,
             run_time,
+            experiment_mode,
         )
 
         self.writer.writerow(row)
@@ -365,6 +404,7 @@ class FrameLogger:
         fieldnames = [
             "run_time",
             "episode_number",
+            "experiment_mode",
             "episode_time",
             "time_alive",
             "episode_over",
@@ -391,7 +431,14 @@ class FrameLogger:
 
         return fieldnames
 
-    def _build_row(self, points, metrics, episode_manager, run_time):
+    def _build_row(
+        self,
+        points,
+        metrics,
+        episode_manager,
+        run_time,
+        experiment_mode,
+    ):
         center_of_mass = metrics["center_of_mass"]
 
         best_reward = episode_manager.best_episode_reward
@@ -401,6 +448,7 @@ class FrameLogger:
         row = {
             "run_time": round(run_time, 3),
             "episode_number": episode_manager.episode_number,
+            "experiment_mode": experiment_mode,
             "episode_time": round(episode_manager.episode_time, 3),
             "time_alive": round(episode_manager.time_alive, 3),
             "episode_over": int(episode_manager.is_episode_over),
@@ -443,6 +491,7 @@ class EpisodeSummaryLogger:
             self.file,
             fieldnames=[
                 "episode_number",
+                "experiment_mode",
                 "end_reason",
                 "episode_time",
                 "time_alive",
@@ -581,7 +630,15 @@ def get_selected_index_from_key(event_key):
     return key_to_index.get(event_key)
 
 
-def apply_mouse_pull(points, selected_index, is_mouse_dragging):
+def apply_mouse_pull(
+    points,
+    selected_index,
+    is_mouse_dragging,
+    experiment_mode_manager,
+):
+    if not experiment_mode_manager.allows_mouse_control():
+        return
+
     if selected_index is None:
         return
 
@@ -596,7 +653,14 @@ def apply_mouse_pull(points, selected_index, is_mouse_dragging):
     selected_point.apply_force(direction * PULL_FORCE)
 
 
-def apply_keyboard_control(points, selected_index):
+def apply_keyboard_control(
+    points,
+    selected_index,
+    experiment_mode_manager,
+):
+    if not experiment_mode_manager.allows_keyboard_control():
+        return
+
     if selected_index is None:
         return
 
@@ -627,6 +691,7 @@ def update_physics(
     dt,
     selected_index,
     is_mouse_dragging,
+    experiment_mode_manager,
 ):
     sub_dt = dt / SUBSTEPS
 
@@ -637,8 +702,18 @@ def update_physics(
         for point in points:
             point.apply_force(gravity_force)
 
-        apply_mouse_pull(points, selected_index, is_mouse_dragging)
-        apply_keyboard_control(points, selected_index)
+        apply_mouse_pull(
+            points,
+            selected_index,
+            is_mouse_dragging,
+            experiment_mode_manager,
+        )
+
+        apply_keyboard_control(
+            points,
+            selected_index,
+            experiment_mode_manager,
+        )
 
         for point in points:
             point.update(sub_dt)
@@ -756,7 +831,16 @@ def get_body_metrics(points):
     }
 
 
-def draw_pull_line(screen, points, selected_index, is_mouse_dragging):
+def draw_pull_line(
+    screen,
+    points,
+    selected_index,
+    is_mouse_dragging,
+    experiment_mode_manager,
+):
+    if not experiment_mode_manager.allows_mouse_control():
+        return
+
     if selected_index is None:
         return
 
@@ -838,6 +922,7 @@ def draw_ui(
     current_fps,
     frame_logger,
     episode_manager,
+    experiment_mode_manager,
 ):
     metrics = get_body_metrics(points)
 
@@ -872,16 +957,16 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Episode: {episode_manager.episode_number}",
+        f"Mode: {experiment_mode_manager.current_mode}",
         10,
         50,
-        EPISODE_TEXT_COLOR,
+        MODE_TEXT_COLOR,
     )
 
     draw_text(
         screen,
         font,
-        f"Episode time: {episode_manager.episode_time:.2f}/{MAX_EPISODE_SECONDS}s",
+        f"Episode: {episode_manager.episode_number}",
         10,
         70,
         EPISODE_TEXT_COLOR,
@@ -890,7 +975,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Time alive: {episode_manager.time_alive:.2f}s",
+        f"Episode time: {episode_manager.episode_time:.2f}/{MAX_EPISODE_SECONDS}s",
         10,
         90,
         EPISODE_TEXT_COLOR,
@@ -899,16 +984,16 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Step reward: {episode_manager.step_reward:.4f}",
+        f"Time alive: {episode_manager.time_alive:.2f}s",
         10,
         110,
-        REWARD_TEXT_COLOR,
+        EPISODE_TEXT_COLOR,
     )
 
     draw_text(
         screen,
         font,
-        f"Episode reward: {episode_manager.episode_total_reward:.2f}",
+        f"Step reward: {episode_manager.step_reward:.4f}",
         10,
         130,
         REWARD_TEXT_COLOR,
@@ -917,27 +1002,27 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Best reward: {best_reward:.2f}",
+        f"Episode reward: {episode_manager.episode_total_reward:.2f}",
         10,
         150,
         REWARD_TEXT_COLOR,
     )
 
-    draw_text(screen, font, logging_text, 10, 170, LOGGING_TEXT_COLOR)
+    draw_text(
+        screen,
+        font,
+        f"Best reward: {best_reward:.2f}",
+        10,
+        170,
+        REWARD_TEXT_COLOR,
+    )
+
+    draw_text(screen, font, logging_text, 10, 190, LOGGING_TEXT_COLOR)
 
     draw_text(
         screen,
         font,
         f"Last end reason: {episode_manager.last_end_reason}",
-        10,
-        190,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Standing score: {metrics['standing_score']}/5",
         10,
         210,
         DEBUG_TEXT_COLOR,
@@ -946,7 +1031,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Head height: {metrics['head_height']:.1f}",
+        f"Standing score: {metrics['standing_score']}/5",
         10,
         230,
         DEBUG_TEXT_COLOR,
@@ -955,7 +1040,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Pelvis height: {metrics['pelvis_height']:.1f}",
+        f"Head height: {metrics['head_height']:.1f}",
         10,
         250,
         DEBUG_TEXT_COLOR,
@@ -964,7 +1049,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Torso angle: {metrics['torso_angle']:.1f}",
+        f"Pelvis height: {metrics['pelvis_height']:.1f}",
         10,
         270,
         DEBUG_TEXT_COLOR,
@@ -973,7 +1058,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Left foot contact: {left_contact}",
+        f"Torso angle: {metrics['torso_angle']:.1f}",
         10,
         290,
         DEBUG_TEXT_COLOR,
@@ -982,7 +1067,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Right foot contact: {right_contact}",
+        f"Left foot contact: {left_contact}",
         10,
         310,
         DEBUG_TEXT_COLOR,
@@ -991,9 +1076,18 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"FPS: {current_fps:.0f}",
+        f"Right foot contact: {right_contact}",
         10,
         330,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"FPS: {current_fps:.0f}",
+        10,
+        350,
         DEBUG_TEXT_COLOR,
     )
 
@@ -1003,25 +1097,33 @@ def draw_ui(
             font,
             "Episode over. Resetting soon...",
             10,
-            350,
+            365,
             FALLEN_TEXT_COLOR,
         )
 
-    draw_text(screen, font, "Mouse: click and drag point", 10, 380)
-    draw_text(screen, font, "Keys 1-0, -: select point", 10, 400)
-    draw_text(screen, font, "Arrows: apply force", 10, 420)
-    draw_text(screen, font, "R: restart | N: next episode", 10, 440)
-    draw_text(screen, font, "L: labels | S: frame logging", 10, 460)
+    draw_text(screen, font, "Mouse: click and drag point", 10, 385)
+    draw_text(screen, font, "Keys 1-0, -: select point", 10, 405)
+    draw_text(screen, font, "Arrows: apply force", 10, 425)
+    draw_text(screen, font, "R: restart | N: next episode", 10, 445)
+    draw_text(screen, font, "L: labels | S: logging | M: mode", 10, 465)
 
     if is_showing_labels:
         draw_joint_labels(screen, font, points)
+
+
+def reset_ragdoll_state():
+    points, bones = create_ragdoll()
+    selected_index = 0
+    is_mouse_dragging = False
+
+    return points, bones, selected_index, is_mouse_dragging
 
 
 def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 17: Reward Function")
+    pygame.display.set_caption("Stage 18: Experiment Modes")
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("arial", 14)
@@ -1040,6 +1142,7 @@ def main():
     episode_summary_logger = EpisodeSummaryLogger()
     episode_manager = EpisodeManager()
     reward_calculator = RewardCalculator()
+    experiment_mode_manager = ExperimentModeManager()
 
     running = True
     while running:
@@ -1066,15 +1169,17 @@ def main():
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
-                    points, bones = create_ragdoll()
-                    selected_index = 0
-                    is_mouse_dragging = False
+                    points, bones, selected_index, is_mouse_dragging = reset_ragdoll_state()
                     episode_manager.restart_current_episode()
 
                 if event.key == pygame.K_n:
-                    points, bones = create_ragdoll()
-                    selected_index = 0
-                    is_mouse_dragging = False
+                    points, bones, selected_index, is_mouse_dragging = reset_ragdoll_state()
+                    episode_manager.start_next_episode()
+
+                if event.key == pygame.K_m:
+                    experiment_mode_manager.cycle_mode()
+
+                    points, bones, selected_index, is_mouse_dragging = reset_ragdoll_state()
                     episode_manager.start_next_episode()
 
                 if event.key == pygame.K_l:
@@ -1095,6 +1200,7 @@ def main():
             dt,
             selected_index,
             is_mouse_dragging,
+            experiment_mode_manager,
         )
 
         metrics = get_body_metrics(points)
@@ -1102,7 +1208,11 @@ def main():
         step_reward = reward_calculator.calculate_step_reward(metrics)
         episode_manager.add_reward(step_reward)
 
-        episode_summary = episode_manager.update(dt, metrics)
+        episode_summary = episode_manager.update(
+            dt,
+            metrics,
+            experiment_mode_manager.current_mode,
+        )
 
         if episode_summary is not None:
             episode_summary_logger.write_summary(episode_summary)
@@ -1113,16 +1223,24 @@ def main():
             episode_manager,
             run_time,
             dt,
+            experiment_mode_manager.current_mode,
         )
 
         if episode_manager.should_auto_reset():
-            points, bones = create_ragdoll()
-            selected_index = 0
-            is_mouse_dragging = False
+            points, bones, selected_index, is_mouse_dragging = reset_ragdoll_state()
             episode_manager.start_next_episode()
+            metrics = get_body_metrics(points)
 
         draw_world(screen)
-        draw_pull_line(screen, points, selected_index, is_mouse_dragging)
+
+        draw_pull_line(
+            screen,
+            points,
+            selected_index,
+            is_mouse_dragging,
+            experiment_mode_manager,
+        )
+
         draw_ragdoll(screen, points, bones, selected_index)
         draw_center_of_mass(screen, metrics["center_of_mass"])
 
@@ -1135,6 +1253,7 @@ def main():
             current_fps,
             frame_logger,
             episode_manager,
+            experiment_mode_manager,
         )
 
         pygame.display.update()
