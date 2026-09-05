@@ -30,6 +30,10 @@ GROUND_CONTACT_EPSILON = 2
 LOG_INTERVAL_SECONDS = 0.1
 LOGS_DIR = Path("logs")
 
+MAX_EPISODE_SECONDS = 12
+FALL_CONFIRM_SECONDS = 0.5
+RESET_DELAY_SECONDS = 1.0
+
 BACKGROUND_COLOR = (25, 30, 30)
 DARK_GREY = (60, 60, 70)
 LINE_COLOR = (200, 200, 200)
@@ -47,6 +51,7 @@ DEBUG_TEXT_COLOR = (170, 220, 255)
 FALLEN_TEXT_COLOR = (255, 120, 120)
 STANDING_TEXT_COLOR = (120, 255, 160)
 LOGGING_TEXT_COLOR = (255, 220, 120)
+EPISODE_TEXT_COLOR = (220, 180, 255)
 
 
 class Point:
@@ -149,7 +154,83 @@ class Bone:
         )
 
 
-class ExperimentLogger:
+class EpisodeManager:
+    def __init__(self):
+        self.episode_number = 1
+        self.episode_time = 0
+        self.time_alive = 0
+        self.fallen_time = 0
+
+        self.is_episode_over = False
+        self.reset_delay_timer = 0
+
+        self.last_end_reason = "None"
+        self.last_summary = None
+
+    def update(self, dt, metrics):
+        if self.is_episode_over:
+            self.reset_delay_timer += dt
+            return None
+
+        self.episode_time += dt
+
+        if metrics["is_fallen"]:
+            self.fallen_time += dt
+        else:
+            self.fallen_time = 0
+            self.time_alive += dt
+
+        if self.fallen_time >= FALL_CONFIRM_SECONDS:
+            return self.end_episode("Fallen", metrics)
+
+        if self.episode_time >= MAX_EPISODE_SECONDS:
+            return self.end_episode("Time limit", metrics)
+
+        return None
+
+    def end_episode(self, reason, metrics):
+        self.is_episode_over = True
+        self.reset_delay_timer = 0
+        self.last_end_reason = reason
+
+        self.last_summary = {
+            "episode_number": self.episode_number,
+            "end_reason": reason,
+            "episode_time": round(self.episode_time, 3),
+            "time_alive": round(self.time_alive, 3),
+            "standing_score": metrics["standing_score"],
+            "head_height": round(metrics["head_height"], 2),
+            "pelvis_height": round(metrics["pelvis_height"], 2),
+            "torso_angle": round(metrics["torso_angle"], 2),
+            "left_foot_contact": int(metrics["left_foot_contact"]),
+            "right_foot_contact": int(metrics["right_foot_contact"]),
+        }
+
+        return self.last_summary
+
+    def should_auto_reset(self):
+        return (
+            self.is_episode_over
+            and self.reset_delay_timer >= RESET_DELAY_SECONDS
+        )
+
+    def restart_current_episode(self):
+        self.episode_time = 0
+        self.time_alive = 0
+        self.fallen_time = 0
+
+        self.is_episode_over = False
+        self.reset_delay_timer = 0
+
+        self.last_end_reason = "Restarted"
+
+    def start_next_episode(self):
+        self.episode_number += 1
+        self.restart_current_episode()
+        self.last_end_reason = "None"
+
+
+class FrameLogger:
     def __init__(self):
         self.is_logging = False
         self.file = None
@@ -161,7 +242,7 @@ class ExperimentLogger:
         LOGS_DIR.mkdir(exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.file_path = LOGS_DIR / f"ragdoll_log_{timestamp}.csv"
+        self.file_path = LOGS_DIR / f"ragdoll_frame_log_{timestamp}.csv"
 
         self.file = open(self.file_path, "w", newline="", encoding="utf-8")
         self.writer = csv.DictWriter(
@@ -174,13 +255,13 @@ class ExperimentLogger:
         self.is_logging = True
         self.time_since_last_log = 0
 
-        print(f"Logging started: {self.file_path}")
+        print(f"Frame logging started: {self.file_path}")
 
     def stop(self):
         if self.file is not None:
             self.file.close()
 
-        print(f"Logging stopped: {self.file_path}")
+        print(f"Frame logging stopped: {self.file_path}")
 
         self.file = None
         self.writer = None
@@ -192,7 +273,7 @@ class ExperimentLogger:
         else:
             self.start(points)
 
-    def update(self, points, metrics, simulation_time, time_alive, dt):
+    def update(self, points, metrics, episode_manager, run_time, dt):
         if not self.is_logging:
             return
 
@@ -206,8 +287,8 @@ class ExperimentLogger:
         row = self._build_row(
             points,
             metrics,
-            simulation_time,
-            time_alive,
+            episode_manager,
+            run_time,
         )
 
         self.writer.writerow(row)
@@ -219,8 +300,11 @@ class ExperimentLogger:
 
     def _get_fieldnames(self, points):
         fieldnames = [
-            "simulation_time",
+            "run_time",
+            "episode_number",
+            "episode_time",
             "time_alive",
+            "episode_over",
             "is_fallen",
             "standing_score",
             "head_height",
@@ -241,12 +325,15 @@ class ExperimentLogger:
 
         return fieldnames
 
-    def _build_row(self, points, metrics, simulation_time, time_alive):
+    def _build_row(self, points, metrics, episode_manager, run_time):
         center_of_mass = metrics["center_of_mass"]
 
         row = {
-            "simulation_time": round(simulation_time, 3),
-            "time_alive": round(time_alive, 3),
+            "run_time": round(run_time, 3),
+            "episode_number": episode_manager.episode_number,
+            "episode_time": round(episode_manager.episode_time, 3),
+            "time_alive": round(episode_manager.time_alive, 3),
+            "episode_over": int(episode_manager.is_episode_over),
             "is_fallen": int(metrics["is_fallen"]),
             "standing_score": metrics["standing_score"],
             "head_height": round(metrics["head_height"], 2),
@@ -266,6 +353,42 @@ class ExperimentLogger:
             row[f"{safe_name}_vy"] = round(point.velocity.y, 2)
 
         return row
+
+
+class EpisodeSummaryLogger:
+    def __init__(self):
+        LOGS_DIR.mkdir(exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.file_path = LOGS_DIR / f"episode_summary_{timestamp}.csv"
+
+        self.file = open(self.file_path, "w", newline="", encoding="utf-8")
+        self.writer = csv.DictWriter(
+            self.file,
+            fieldnames=[
+                "episode_number",
+                "end_reason",
+                "episode_time",
+                "time_alive",
+                "standing_score",
+                "head_height",
+                "pelvis_height",
+                "torso_angle",
+                "left_foot_contact",
+                "right_foot_contact",
+            ],
+        )
+
+        self.writer.writeheader()
+
+        print(f"Episode summary file: {self.file_path}")
+
+    def write_summary(self, summary):
+        self.writer.writerow(summary)
+        self.file.flush()
+
+    def close(self):
+        self.file.close()
 
 
 def create_ragdoll():
@@ -633,9 +756,9 @@ def draw_ui(
     points,
     selected_index,
     is_showing_labels,
-    time_alive,
     current_fps,
-    logger,
+    frame_logger,
+    episode_manager,
 ):
     metrics = get_body_metrics(points)
 
@@ -652,10 +775,10 @@ def draw_ui(
         status_text = "Status: Standing"
         status_color = STANDING_TEXT_COLOR
 
-    if logger.is_logging:
-        logging_text = f"Logging: ON -> {logger.file_path.name}"
+    if frame_logger.is_logging:
+        logging_text = f"Frame logging: ON -> {frame_logger.file_path.name}"
     else:
-        logging_text = "Logging: OFF"
+        logging_text = "Frame logging: OFF"
 
     left_contact = "YES" if metrics["left_foot_contact"] else "NO"
     right_contact = "YES" if metrics["right_foot_contact"] else "NO"
@@ -664,14 +787,61 @@ def draw_ui(
 
     draw_text(screen, font, selected_text, 10, 10)
     draw_text(screen, font, status_text, 10, 30, status_color)
-    draw_text(screen, font, logging_text, 10, 50, LOGGING_TEXT_COLOR)
 
     draw_text(
         screen,
         font,
-        f"Time alive: {time_alive:.2f}s",
+        f"Episode: {episode_manager.episode_number}",
+        10,
+        50,
+        EPISODE_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Episode time: {episode_manager.episode_time:.2f}/{MAX_EPISODE_SECONDS}s",
         10,
         70,
+        EPISODE_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Time alive: {episode_manager.time_alive:.2f}s",
+        10,
+        90,
+        EPISODE_TEXT_COLOR,
+    )
+
+    draw_text(screen, font, logging_text, 10, 110, LOGGING_TEXT_COLOR)
+
+    draw_text(
+        screen,
+        font,
+        f"Last end reason: {episode_manager.last_end_reason}",
+        10,
+        130,
+        DEBUG_TEXT_COLOR,
+    )
+
+    if episode_manager.is_episode_over:
+        draw_text(
+            screen,
+            font,
+            "Episode over. Resetting soon...",
+            10,
+            150,
+            FALLEN_TEXT_COLOR,
+        )
+
+    draw_text(
+        screen,
+        font,
+        f"Standing score: {metrics['standing_score']}/5",
+        10,
+        175,
         DEBUG_TEXT_COLOR,
     )
 
@@ -680,7 +850,7 @@ def draw_ui(
         font,
         f"Head height: {metrics['head_height']:.1f}",
         10,
-        90,
+        195,
         DEBUG_TEXT_COLOR,
     )
 
@@ -689,7 +859,7 @@ def draw_ui(
         font,
         f"Pelvis height: {metrics['pelvis_height']:.1f}",
         10,
-        110,
+        215,
         DEBUG_TEXT_COLOR,
     )
 
@@ -698,16 +868,7 @@ def draw_ui(
         font,
         f"Torso angle: {metrics['torso_angle']:.1f}",
         10,
-        130,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Standing score: {metrics['standing_score']}/5",
-        10,
-        150,
+        235,
         DEBUG_TEXT_COLOR,
     )
 
@@ -716,7 +877,7 @@ def draw_ui(
         font,
         f"Left foot contact: {left_contact}",
         10,
-        170,
+        255,
         DEBUG_TEXT_COLOR,
     )
 
@@ -725,7 +886,7 @@ def draw_ui(
         font,
         f"Right foot contact: {right_contact}",
         10,
-        190,
+        275,
         DEBUG_TEXT_COLOR,
     )
 
@@ -734,7 +895,7 @@ def draw_ui(
         font,
         f"Center mass: ({center_of_mass.x:.1f}, {center_of_mass.y:.1f})",
         10,
-        210,
+        295,
         DEBUG_TEXT_COLOR,
     )
 
@@ -743,35 +904,15 @@ def draw_ui(
         font,
         f"FPS: {current_fps:.0f}",
         10,
-        230,
+        315,
         DEBUG_TEXT_COLOR,
     )
-
-    if selected_index is not None:
-        selected_point = points[selected_index]
-
-        draw_text(
-            screen,
-            font,
-            f"Position: ({selected_point.position.x:.1f}, {selected_point.position.y:.1f})",
-            10,
-            250,
-            DEBUG_TEXT_COLOR,
-        )
-
-        draw_text(
-            screen,
-            font,
-            f"Velocity: ({selected_point.velocity.x:.1f}, {selected_point.velocity.y:.1f})",
-            10,
-            270,
-            DEBUG_TEXT_COLOR,
-        )
 
     draw_text(screen, font, "Mouse: click and drag point", 10, 380)
     draw_text(screen, font, "Keys 1-0, -: select point", 10, 400)
     draw_text(screen, font, "Arrows: apply force", 10, 420)
-    draw_text(screen, font, "R: reset | L: labels | S: logging", 10, 440)
+    draw_text(screen, font, "R: restart | N: next episode", 10, 440)
+    draw_text(screen, font, "L: labels | S: frame logging", 10, 460)
 
     if is_showing_labels:
         draw_joint_labels(screen, font, points)
@@ -781,7 +922,7 @@ def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 15: CSV Logger")
+    pygame.display.set_caption("Stage 16: Episode System")
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("arial", 14)
@@ -792,19 +933,20 @@ def main():
     is_mouse_dragging = False
     is_showing_labels = True
 
-    time_alive = 0
-    simulation_time = 0
+    run_time = 0
 
     gravity_force = pygame.Vector2(0, GRAVITY_Y)
 
-    logger = ExperimentLogger()
+    frame_logger = FrameLogger()
+    episode_summary_logger = EpisodeSummaryLogger()
+    episode_manager = EpisodeManager()
 
     running = True
     while running:
         dt = clock.tick(FPS) / 1000
         current_fps = clock.get_fps()
 
-        simulation_time += dt
+        run_time += dt
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -827,14 +969,19 @@ def main():
                     points, bones = create_ragdoll()
                     selected_index = 0
                     is_mouse_dragging = False
-                    time_alive = 0
-                    simulation_time = 0
+                    episode_manager.restart_current_episode()
+
+                if event.key == pygame.K_n:
+                    points, bones = create_ragdoll()
+                    selected_index = 0
+                    is_mouse_dragging = False
+                    episode_manager.start_next_episode()
 
                 if event.key == pygame.K_l:
                     is_showing_labels = not is_showing_labels
 
                 if event.key == pygame.K_s:
-                    logger.toggle(points)
+                    frame_logger.toggle(points)
 
                 new_selected_index = get_selected_index_from_key(event.key)
 
@@ -852,16 +999,24 @@ def main():
 
         metrics = get_body_metrics(points)
 
-        if not metrics["is_fallen"]:
-            time_alive += dt
+        episode_summary = episode_manager.update(dt, metrics)
 
-        logger.update(
+        if episode_summary is not None:
+            episode_summary_logger.write_summary(episode_summary)
+
+        frame_logger.update(
             points,
             metrics,
-            simulation_time,
-            time_alive,
+            episode_manager,
+            run_time,
             dt,
         )
+
+        if episode_manager.should_auto_reset():
+            points, bones = create_ragdoll()
+            selected_index = 0
+            is_mouse_dragging = False
+            episode_manager.start_next_episode()
 
         draw_world(screen)
         draw_pull_line(screen, points, selected_index, is_mouse_dragging)
@@ -874,14 +1029,15 @@ def main():
             points,
             selected_index,
             is_showing_labels,
-            time_alive,
             current_fps,
-            logger,
+            frame_logger,
+            episode_manager,
         )
 
         pygame.display.update()
 
-    logger.close()
+    frame_logger.close()
+    episode_summary_logger.close()
     pygame.quit()
 
 
