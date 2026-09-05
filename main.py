@@ -21,14 +21,19 @@ SELECT_RADIUS = 25
 PULL_FORCE = 80
 KEYBOARD_CONTROL_FORCE = 2500
 
+GROUND_CONTACT_EPSILON = 2
+
 BACKGROUND_COLOR = (25, 30, 30)
 DARK_GREY = (60, 60, 70)
 LINE_COLOR = (200, 200, 200)
 
 POINT_COLOR = (240, 220, 120)
 SELECTED_POINT_COLOR = (255, 100, 100)
+FOOT_CONTACT_COLOR = (120, 255, 160)
+
 BONE_COLOR = (220, 220, 230)
 PULL_LINE_COLOR = (255, 120, 120)
+CENTER_OF_MASS_COLOR = (120, 180, 255)
 
 TEXT_COLOR = (230, 230, 230)
 DEBUG_TEXT_COLOR = (170, 220, 255)
@@ -45,6 +50,7 @@ class Point:
         self.acceleration = pygame.Vector2(0, 0)
 
         self.radius = radius
+        self.is_touching_floor = False
 
     def apply_force(self, force):
         self.acceleration += force
@@ -57,7 +63,13 @@ class Point:
 
         self.acceleration *= 0
 
+    def reset_contact_state(self):
+        self.is_touching_floor = False
+
     def solve_world_collision(self):
+        if self.position.y + self.radius >= FLOOR_Y - GROUND_CONTACT_EPSILON:
+            self.is_touching_floor = True
+
         if self.position.y + self.radius > FLOOR_Y:
             self.position.y = FLOOR_Y - self.radius
             self.velocity.y *= -0.4
@@ -75,7 +87,13 @@ class Point:
             self.velocity.x *= -0.4
 
     def draw(self, screen, is_selected=False):
-        color = SELECTED_POINT_COLOR if is_selected else POINT_COLOR
+        color = POINT_COLOR
+
+        if self.name in ("Left Foot", "Right Foot") and self.is_touching_floor:
+            color = FOOT_CONTACT_COLOR
+
+        if is_selected:
+            color = SELECTED_POINT_COLOR
 
         pygame.draw.circle(
             screen,
@@ -172,6 +190,14 @@ def create_ragdoll():
     ]
 
     return points, bones
+
+
+def get_point_by_name(points, name):
+    for point in points:
+        if point.name == name:
+            return point
+
+    return None
 
 
 def draw_world(screen):
@@ -277,6 +303,9 @@ def update_physics(
 
     for _ in range(SUBSTEPS):
         for point in points:
+            point.reset_contact_state()
+
+        for point in points:
             point.apply_force(gravity_force)
 
         apply_mouse_pull(points, selected_index, is_mouse_dragging)
@@ -293,10 +322,69 @@ def update_physics(
                 point.solve_world_collision()
 
 
+def calculate_center_of_mass(points):
+    total_position = pygame.Vector2(0, 0)
+
+    for point in points:
+        total_position += point.position
+
+    return total_position / len(points)
+
+
+def calculate_standing_score(points):
+    head = get_point_by_name(points, "Head")
+    chest = get_point_by_name(points, "Chest")
+    pelvis = get_point_by_name(points, "Pelvis")
+
+    left_foot = get_point_by_name(points, "Left Foot")
+    right_foot = get_point_by_name(points, "Right Foot")
+
+    head_height = FLOOR_Y - head.position.y
+    pelvis_height = FLOOR_Y - pelvis.position.y
+
+    torso_vector = pelvis.position - chest.position
+
+    if torso_vector.length() == 0:
+        torso_angle = 0
+    else:
+        torso_angle = abs(torso_vector.angle_to(pygame.Vector2(0, 1)))
+
+    foot_contact_count = 0
+
+    if left_foot.is_touching_floor:
+        foot_contact_count += 1
+
+    if right_foot.is_touching_floor:
+        foot_contact_count += 1
+
+    score = 0
+
+    if head_height > 120:
+        score += 1
+
+    if pelvis_height > 70:
+        score += 1
+
+    if torso_angle < 45:
+        score += 1
+
+    if foot_contact_count > 0:
+        score += 1
+
+    if head.position.y < chest.position.y:
+        score += 1
+
+    return score
+
+
 def get_body_metrics(points):
-    head = points[0]
-    chest = points[1]
-    pelvis = points[2]
+    head = get_point_by_name(points, "Head")
+    chest = get_point_by_name(points, "Chest")
+    pelvis = get_point_by_name(points, "Pelvis")
+    left_foot = get_point_by_name(points, "Left Foot")
+    right_foot = get_point_by_name(points, "Right Foot")
+
+    center_of_mass = calculate_center_of_mass(points)
 
     head_height = FLOOR_Y - head.position.y
     pelvis_height = FLOOR_Y - pelvis.position.y
@@ -308,18 +396,33 @@ def get_body_metrics(points):
     else:
         torso_angle = torso_vector.angle_to(pygame.Vector2(0, 1))
 
+    left_foot_contact = left_foot.is_touching_floor
+    right_foot_contact = right_foot.is_touching_floor
+
+    standing_score = calculate_standing_score(points)
+
     is_fallen = False
 
-    if head.position.y > pelvis.position.y - 20:
+    if head.position.y > chest.position.y:
         is_fallen = True
 
-    if head.position.y > FLOOR_Y - 40:
+    if head_height < 60:
+        is_fallen = True
+
+    if pelvis_height < 35:
+        is_fallen = True
+
+    if abs(torso_angle) > 85:
         is_fallen = True
 
     return {
         "head_height": head_height,
         "pelvis_height": pelvis_height,
         "torso_angle": torso_angle,
+        "left_foot_contact": left_foot_contact,
+        "right_foot_contact": right_foot_contact,
+        "center_of_mass": center_of_mass,
+        "standing_score": standing_score,
         "is_fallen": is_fallen,
     }
 
@@ -339,6 +442,31 @@ def draw_pull_line(screen, points, selected_index, is_mouse_dragging):
         PULL_LINE_COLOR,
         selected_point.position,
         mouse_position,
+        2,
+    )
+
+
+def draw_center_of_mass(screen, center_of_mass):
+    pygame.draw.circle(
+        screen,
+        CENTER_OF_MASS_COLOR,
+        (int(center_of_mass.x), int(center_of_mass.y)),
+        6,
+    )
+
+    pygame.draw.line(
+        screen,
+        CENTER_OF_MASS_COLOR,
+        (int(center_of_mass.x), int(center_of_mass.y) - 10),
+        (int(center_of_mass.x), int(center_of_mass.y) + 10),
+        2,
+    )
+
+    pygame.draw.line(
+        screen,
+        CENTER_OF_MASS_COLOR,
+        (int(center_of_mass.x) - 10, int(center_of_mass.y)),
+        (int(center_of_mass.x) + 10, int(center_of_mass.y)),
         2,
     )
 
@@ -396,6 +524,11 @@ def draw_ui(
         status_text = "Status: Standing"
         status_color = STANDING_TEXT_COLOR
 
+    left_contact = "YES" if metrics["left_foot_contact"] else "NO"
+    right_contact = "YES" if metrics["right_foot_contact"] else "NO"
+
+    center_of_mass = metrics["center_of_mass"]
+
     draw_text(screen, font, selected_text, 10, 10)
     draw_text(screen, font, status_text, 10, 30, status_color)
 
@@ -438,9 +571,45 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"FPS: {current_fps:.0f}",
+        f"Standing score: {metrics['standing_score']}/5",
         10,
         130,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Left foot contact: {left_contact}",
+        10,
+        150,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Right foot contact: {right_contact}",
+        10,
+        170,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Center mass: ({center_of_mass.x:.1f}, {center_of_mass.y:.1f})",
+        10,
+        190,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"FPS: {current_fps:.0f}",
+        10,
+        210,
         DEBUG_TEXT_COLOR,
     )
 
@@ -452,7 +621,7 @@ def draw_ui(
             font,
             f"Position: ({selected_point.position.x:.1f}, {selected_point.position.y:.1f})",
             10,
-            150,
+            230,
             DEBUG_TEXT_COLOR,
         )
 
@@ -461,7 +630,7 @@ def draw_ui(
             font,
             f"Velocity: ({selected_point.velocity.x:.1f}, {selected_point.velocity.y:.1f})",
             10,
-            170,
+            250,
             DEBUG_TEXT_COLOR,
         )
 
@@ -478,7 +647,7 @@ def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 13: Debug Overlay and Body Metrics")
+    pygame.display.set_caption("Stage 14: Foot Contact and Better Metrics")
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("arial", 14)
@@ -546,6 +715,7 @@ def main():
         draw_world(screen)
         draw_pull_line(screen, points, selected_index, is_mouse_dragging)
         draw_ragdoll(screen, points, bones, selected_index)
+        draw_center_of_mass(screen, metrics["center_of_mass"])
 
         draw_ui(
             screen,
