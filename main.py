@@ -52,6 +52,7 @@ FALLEN_TEXT_COLOR = (255, 120, 120)
 STANDING_TEXT_COLOR = (120, 255, 160)
 LOGGING_TEXT_COLOR = (255, 220, 120)
 EPISODE_TEXT_COLOR = (220, 180, 255)
+REWARD_TEXT_COLOR = (255, 210, 120)
 
 
 class Point:
@@ -154,6 +155,44 @@ class Bone:
         )
 
 
+class RewardCalculator:
+    def calculate_step_reward(self, metrics):
+        if metrics["is_fallen"]:
+            return -5.0
+
+        reward = 0.0
+
+        reward += metrics["standing_score"] * 0.05
+
+        torso_angle = abs(metrics["torso_angle"])
+
+        if torso_angle < 15:
+            reward += 0.20
+        elif torso_angle < 35:
+            reward += 0.10
+        else:
+            reward -= 0.05
+
+        if metrics["head_height"] > 120:
+            reward += 0.10
+        else:
+            reward -= 0.10
+
+        if metrics["pelvis_height"] > 70:
+            reward += 0.05
+        else:
+            reward -= 0.05
+
+        if metrics["left_foot_contact"] or metrics["right_foot_contact"]:
+            reward += 0.05
+        else:
+            reward -= 0.03
+
+        reward -= torso_angle * 0.001
+
+        return round(reward, 4)
+
+
 class EpisodeManager:
     def __init__(self):
         self.episode_number = 1
@@ -161,11 +200,22 @@ class EpisodeManager:
         self.time_alive = 0
         self.fallen_time = 0
 
+        self.step_reward = 0
+        self.episode_total_reward = 0
+        self.best_episode_reward = None
+
         self.is_episode_over = False
         self.reset_delay_timer = 0
 
         self.last_end_reason = "None"
         self.last_summary = None
+
+    def add_reward(self, step_reward):
+        if self.is_episode_over:
+            return
+
+        self.step_reward = step_reward
+        self.episode_total_reward += step_reward
 
     def update(self, dt, metrics):
         if self.is_episode_over:
@@ -193,11 +243,21 @@ class EpisodeManager:
         self.reset_delay_timer = 0
         self.last_end_reason = reason
 
+        rounded_total_reward = round(self.episode_total_reward, 3)
+
+        if self.best_episode_reward is None:
+            self.best_episode_reward = rounded_total_reward
+        elif rounded_total_reward > self.best_episode_reward:
+            self.best_episode_reward = rounded_total_reward
+
         self.last_summary = {
             "episode_number": self.episode_number,
             "end_reason": reason,
             "episode_time": round(self.episode_time, 3),
             "time_alive": round(self.time_alive, 3),
+            "step_reward": round(self.step_reward, 4),
+            "episode_total_reward": rounded_total_reward,
+            "best_episode_reward": self.best_episode_reward,
             "standing_score": metrics["standing_score"],
             "head_height": round(metrics["head_height"], 2),
             "pelvis_height": round(metrics["pelvis_height"], 2),
@@ -218,6 +278,9 @@ class EpisodeManager:
         self.episode_time = 0
         self.time_alive = 0
         self.fallen_time = 0
+
+        self.step_reward = 0
+        self.episode_total_reward = 0
 
         self.is_episode_over = False
         self.reset_delay_timer = 0
@@ -305,6 +368,9 @@ class FrameLogger:
             "episode_time",
             "time_alive",
             "episode_over",
+            "step_reward",
+            "episode_total_reward",
+            "best_episode_reward",
             "is_fallen",
             "standing_score",
             "head_height",
@@ -328,12 +394,22 @@ class FrameLogger:
     def _build_row(self, points, metrics, episode_manager, run_time):
         center_of_mass = metrics["center_of_mass"]
 
+        best_reward = episode_manager.best_episode_reward
+        if best_reward is None:
+            best_reward = 0
+
         row = {
             "run_time": round(run_time, 3),
             "episode_number": episode_manager.episode_number,
             "episode_time": round(episode_manager.episode_time, 3),
             "time_alive": round(episode_manager.time_alive, 3),
             "episode_over": int(episode_manager.is_episode_over),
+            "step_reward": round(episode_manager.step_reward, 4),
+            "episode_total_reward": round(
+                episode_manager.episode_total_reward,
+                3,
+            ),
+            "best_episode_reward": round(best_reward, 3),
             "is_fallen": int(metrics["is_fallen"]),
             "standing_score": metrics["standing_score"],
             "head_height": round(metrics["head_height"], 2),
@@ -370,6 +446,9 @@ class EpisodeSummaryLogger:
                 "end_reason",
                 "episode_time",
                 "time_alive",
+                "step_reward",
+                "episode_total_reward",
+                "best_episode_reward",
                 "standing_score",
                 "head_height",
                 "pelvis_height",
@@ -783,7 +862,9 @@ def draw_ui(
     left_contact = "YES" if metrics["left_foot_contact"] else "NO"
     right_contact = "YES" if metrics["right_foot_contact"] else "NO"
 
-    center_of_mass = metrics["center_of_mass"]
+    best_reward = episode_manager.best_episode_reward
+    if best_reward is None:
+        best_reward = 0
 
     draw_text(screen, font, selected_text, 10, 10)
     draw_text(screen, font, status_text, 10, 30, status_color)
@@ -815,14 +896,104 @@ def draw_ui(
         EPISODE_TEXT_COLOR,
     )
 
-    draw_text(screen, font, logging_text, 10, 110, LOGGING_TEXT_COLOR)
+    draw_text(
+        screen,
+        font,
+        f"Step reward: {episode_manager.step_reward:.4f}",
+        10,
+        110,
+        REWARD_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Episode reward: {episode_manager.episode_total_reward:.2f}",
+        10,
+        130,
+        REWARD_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Best reward: {best_reward:.2f}",
+        10,
+        150,
+        REWARD_TEXT_COLOR,
+    )
+
+    draw_text(screen, font, logging_text, 10, 170, LOGGING_TEXT_COLOR)
 
     draw_text(
         screen,
         font,
         f"Last end reason: {episode_manager.last_end_reason}",
         10,
-        130,
+        190,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Standing score: {metrics['standing_score']}/5",
+        10,
+        210,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Head height: {metrics['head_height']:.1f}",
+        10,
+        230,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Pelvis height: {metrics['pelvis_height']:.1f}",
+        10,
+        250,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Torso angle: {metrics['torso_angle']:.1f}",
+        10,
+        270,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Left foot contact: {left_contact}",
+        10,
+        290,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Right foot contact: {right_contact}",
+        10,
+        310,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"FPS: {current_fps:.0f}",
+        10,
+        330,
         DEBUG_TEXT_COLOR,
     )
 
@@ -832,81 +1003,9 @@ def draw_ui(
             font,
             "Episode over. Resetting soon...",
             10,
-            150,
+            350,
             FALLEN_TEXT_COLOR,
         )
-
-    draw_text(
-        screen,
-        font,
-        f"Standing score: {metrics['standing_score']}/5",
-        10,
-        175,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Head height: {metrics['head_height']:.1f}",
-        10,
-        195,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Pelvis height: {metrics['pelvis_height']:.1f}",
-        10,
-        215,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Torso angle: {metrics['torso_angle']:.1f}",
-        10,
-        235,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Left foot contact: {left_contact}",
-        10,
-        255,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Right foot contact: {right_contact}",
-        10,
-        275,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Center mass: ({center_of_mass.x:.1f}, {center_of_mass.y:.1f})",
-        10,
-        295,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"FPS: {current_fps:.0f}",
-        10,
-        315,
-        DEBUG_TEXT_COLOR,
-    )
 
     draw_text(screen, font, "Mouse: click and drag point", 10, 380)
     draw_text(screen, font, "Keys 1-0, -: select point", 10, 400)
@@ -922,7 +1021,7 @@ def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 16: Episode System")
+    pygame.display.set_caption("Stage 17: Reward Function")
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("arial", 14)
@@ -940,6 +1039,7 @@ def main():
     frame_logger = FrameLogger()
     episode_summary_logger = EpisodeSummaryLogger()
     episode_manager = EpisodeManager()
+    reward_calculator = RewardCalculator()
 
     running = True
     while running:
@@ -998,6 +1098,9 @@ def main():
         )
 
         metrics = get_body_metrics(points)
+
+        step_reward = reward_calculator.calculate_step_reward(metrics)
+        episode_manager.add_reward(step_reward)
 
         episode_summary = episode_manager.update(dt, metrics)
 
