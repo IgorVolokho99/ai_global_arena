@@ -1,3 +1,7 @@
+import csv
+from datetime import datetime
+from pathlib import Path
+
 import pygame
 
 SCREEN_WIDTH = 500
@@ -23,6 +27,9 @@ KEYBOARD_CONTROL_FORCE = 2500
 
 GROUND_CONTACT_EPSILON = 2
 
+LOG_INTERVAL_SECONDS = 0.1
+LOGS_DIR = Path("logs")
+
 BACKGROUND_COLOR = (25, 30, 30)
 DARK_GREY = (60, 60, 70)
 LINE_COLOR = (200, 200, 200)
@@ -39,6 +46,7 @@ TEXT_COLOR = (230, 230, 230)
 DEBUG_TEXT_COLOR = (170, 220, 255)
 FALLEN_TEXT_COLOR = (255, 120, 120)
 STANDING_TEXT_COLOR = (120, 255, 160)
+LOGGING_TEXT_COLOR = (255, 220, 120)
 
 
 class Point:
@@ -141,6 +149,125 @@ class Bone:
         )
 
 
+class ExperimentLogger:
+    def __init__(self):
+        self.is_logging = False
+        self.file = None
+        self.writer = None
+        self.file_path = None
+        self.time_since_last_log = 0
+
+    def start(self, points):
+        LOGS_DIR.mkdir(exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.file_path = LOGS_DIR / f"ragdoll_log_{timestamp}.csv"
+
+        self.file = open(self.file_path, "w", newline="", encoding="utf-8")
+        self.writer = csv.DictWriter(
+            self.file,
+            fieldnames=self._get_fieldnames(points),
+        )
+
+        self.writer.writeheader()
+
+        self.is_logging = True
+        self.time_since_last_log = 0
+
+        print(f"Logging started: {self.file_path}")
+
+    def stop(self):
+        if self.file is not None:
+            self.file.close()
+
+        print(f"Logging stopped: {self.file_path}")
+
+        self.file = None
+        self.writer = None
+        self.is_logging = False
+
+    def toggle(self, points):
+        if self.is_logging:
+            self.stop()
+        else:
+            self.start(points)
+
+    def update(self, points, metrics, simulation_time, time_alive, dt):
+        if not self.is_logging:
+            return
+
+        self.time_since_last_log += dt
+
+        if self.time_since_last_log < LOG_INTERVAL_SECONDS:
+            return
+
+        self.time_since_last_log = 0
+
+        row = self._build_row(
+            points,
+            metrics,
+            simulation_time,
+            time_alive,
+        )
+
+        self.writer.writerow(row)
+        self.file.flush()
+
+    def close(self):
+        if self.is_logging:
+            self.stop()
+
+    def _get_fieldnames(self, points):
+        fieldnames = [
+            "simulation_time",
+            "time_alive",
+            "is_fallen",
+            "standing_score",
+            "head_height",
+            "pelvis_height",
+            "torso_angle",
+            "left_foot_contact",
+            "right_foot_contact",
+            "center_of_mass_x",
+            "center_of_mass_y",
+        ]
+
+        for point in points:
+            safe_name = point.name.lower().replace(" ", "_")
+            fieldnames.append(f"{safe_name}_x")
+            fieldnames.append(f"{safe_name}_y")
+            fieldnames.append(f"{safe_name}_vx")
+            fieldnames.append(f"{safe_name}_vy")
+
+        return fieldnames
+
+    def _build_row(self, points, metrics, simulation_time, time_alive):
+        center_of_mass = metrics["center_of_mass"]
+
+        row = {
+            "simulation_time": round(simulation_time, 3),
+            "time_alive": round(time_alive, 3),
+            "is_fallen": int(metrics["is_fallen"]),
+            "standing_score": metrics["standing_score"],
+            "head_height": round(metrics["head_height"], 2),
+            "pelvis_height": round(metrics["pelvis_height"], 2),
+            "torso_angle": round(metrics["torso_angle"], 2),
+            "left_foot_contact": int(metrics["left_foot_contact"]),
+            "right_foot_contact": int(metrics["right_foot_contact"]),
+            "center_of_mass_x": round(center_of_mass.x, 2),
+            "center_of_mass_y": round(center_of_mass.y, 2),
+        }
+
+        for point in points:
+            safe_name = point.name.lower().replace(" ", "_")
+            row[f"{safe_name}_x"] = round(point.position.x, 2)
+            row[f"{safe_name}_y"] = round(point.position.y, 2)
+            row[f"{safe_name}_vx"] = round(point.velocity.x, 2)
+            row[f"{safe_name}_vy"] = round(point.velocity.y, 2)
+
+        return row
+
+
 def create_ragdoll():
     head = Point("Head", 250, 100, 5)
     chest = Point("Chest", 250, 150, 5)
@@ -236,17 +363,17 @@ def find_nearest_point_index(points, mouse_position):
 
 def get_selected_index_from_key(event_key):
     key_to_index = {
-        pygame.K_1: 0,       # Head
-        pygame.K_2: 1,       # Chest
-        pygame.K_3: 2,       # Pelvis
-        pygame.K_4: 3,       # Left Elbow
-        pygame.K_5: 4,       # Left Hand
-        pygame.K_6: 5,       # Right Elbow
-        pygame.K_7: 6,       # Right Hand
-        pygame.K_8: 7,       # Left Knee
-        pygame.K_9: 8,       # Left Foot
-        pygame.K_0: 9,       # Right Knee
-        pygame.K_MINUS: 10,  # Right Foot
+        pygame.K_1: 0,
+        pygame.K_2: 1,
+        pygame.K_3: 2,
+        pygame.K_4: 3,
+        pygame.K_5: 4,
+        pygame.K_6: 5,
+        pygame.K_7: 6,
+        pygame.K_8: 7,
+        pygame.K_9: 8,
+        pygame.K_0: 9,
+        pygame.K_MINUS: 10,
     }
 
     return key_to_index.get(event_key)
@@ -508,6 +635,7 @@ def draw_ui(
     is_showing_labels,
     time_alive,
     current_fps,
+    logger,
 ):
     metrics = get_body_metrics(points)
 
@@ -524,6 +652,11 @@ def draw_ui(
         status_text = "Status: Standing"
         status_color = STANDING_TEXT_COLOR
 
+    if logger.is_logging:
+        logging_text = f"Logging: ON -> {logger.file_path.name}"
+    else:
+        logging_text = "Logging: OFF"
+
     left_contact = "YES" if metrics["left_foot_contact"] else "NO"
     right_contact = "YES" if metrics["right_foot_contact"] else "NO"
 
@@ -531,20 +664,12 @@ def draw_ui(
 
     draw_text(screen, font, selected_text, 10, 10)
     draw_text(screen, font, status_text, 10, 30, status_color)
+    draw_text(screen, font, logging_text, 10, 50, LOGGING_TEXT_COLOR)
 
     draw_text(
         screen,
         font,
         f"Time alive: {time_alive:.2f}s",
-        10,
-        50,
-        DEBUG_TEXT_COLOR,
-    )
-
-    draw_text(
-        screen,
-        font,
-        f"Head height: {metrics['head_height']:.1f}",
         10,
         70,
         DEBUG_TEXT_COLOR,
@@ -553,7 +678,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Pelvis height: {metrics['pelvis_height']:.1f}",
+        f"Head height: {metrics['head_height']:.1f}",
         10,
         90,
         DEBUG_TEXT_COLOR,
@@ -562,7 +687,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Torso angle: {metrics['torso_angle']:.1f}",
+        f"Pelvis height: {metrics['pelvis_height']:.1f}",
         10,
         110,
         DEBUG_TEXT_COLOR,
@@ -571,7 +696,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Standing score: {metrics['standing_score']}/5",
+        f"Torso angle: {metrics['torso_angle']:.1f}",
         10,
         130,
         DEBUG_TEXT_COLOR,
@@ -580,7 +705,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Left foot contact: {left_contact}",
+        f"Standing score: {metrics['standing_score']}/5",
         10,
         150,
         DEBUG_TEXT_COLOR,
@@ -589,7 +714,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Right foot contact: {right_contact}",
+        f"Left foot contact: {left_contact}",
         10,
         170,
         DEBUG_TEXT_COLOR,
@@ -598,7 +723,7 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"Center mass: ({center_of_mass.x:.1f}, {center_of_mass.y:.1f})",
+        f"Right foot contact: {right_contact}",
         10,
         190,
         DEBUG_TEXT_COLOR,
@@ -607,9 +732,18 @@ def draw_ui(
     draw_text(
         screen,
         font,
-        f"FPS: {current_fps:.0f}",
+        f"Center mass: ({center_of_mass.x:.1f}, {center_of_mass.y:.1f})",
         10,
         210,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"FPS: {current_fps:.0f}",
+        10,
+        230,
         DEBUG_TEXT_COLOR,
     )
 
@@ -621,7 +755,7 @@ def draw_ui(
             font,
             f"Position: ({selected_point.position.x:.1f}, {selected_point.position.y:.1f})",
             10,
-            230,
+            250,
             DEBUG_TEXT_COLOR,
         )
 
@@ -630,14 +764,14 @@ def draw_ui(
             font,
             f"Velocity: ({selected_point.velocity.x:.1f}, {selected_point.velocity.y:.1f})",
             10,
-            250,
+            270,
             DEBUG_TEXT_COLOR,
         )
 
-    draw_text(screen, font, "Mouse: click and drag point", 10, 400)
-    draw_text(screen, font, "Keys 1-0, -: select point", 10, 420)
-    draw_text(screen, font, "Arrows: apply force", 10, 440)
-    draw_text(screen, font, "R: reset | L: labels on/off", 10, 460)
+    draw_text(screen, font, "Mouse: click and drag point", 10, 380)
+    draw_text(screen, font, "Keys 1-0, -: select point", 10, 400)
+    draw_text(screen, font, "Arrows: apply force", 10, 420)
+    draw_text(screen, font, "R: reset | L: labels | S: logging", 10, 440)
 
     if is_showing_labels:
         draw_joint_labels(screen, font, points)
@@ -647,7 +781,7 @@ def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 14: Foot Contact and Better Metrics")
+    pygame.display.set_caption("Stage 15: CSV Logger")
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont("arial", 14)
@@ -659,13 +793,18 @@ def main():
     is_showing_labels = True
 
     time_alive = 0
+    simulation_time = 0
 
     gravity_force = pygame.Vector2(0, GRAVITY_Y)
+
+    logger = ExperimentLogger()
 
     running = True
     while running:
         dt = clock.tick(FPS) / 1000
         current_fps = clock.get_fps()
+
+        simulation_time += dt
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -689,9 +828,13 @@ def main():
                     selected_index = 0
                     is_mouse_dragging = False
                     time_alive = 0
+                    simulation_time = 0
 
                 if event.key == pygame.K_l:
                     is_showing_labels = not is_showing_labels
+
+                if event.key == pygame.K_s:
+                    logger.toggle(points)
 
                 new_selected_index = get_selected_index_from_key(event.key)
 
@@ -712,6 +855,14 @@ def main():
         if not metrics["is_fallen"]:
             time_alive += dt
 
+        logger.update(
+            points,
+            metrics,
+            simulation_time,
+            time_alive,
+            dt,
+        )
+
         draw_world(screen)
         draw_pull_line(screen, points, selected_index, is_mouse_dragging)
         draw_ragdoll(screen, points, bones, selected_index)
@@ -725,10 +876,12 @@ def main():
             is_showing_labels,
             time_alive,
             current_fps,
+            logger,
         )
 
         pygame.display.update()
 
+    logger.close()
     pygame.quit()
 
 
