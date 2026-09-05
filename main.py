@@ -19,6 +19,7 @@ RIGHT_WALL_X = SCREEN_WIDTH
 
 SELECT_RADIUS = 25
 PULL_FORCE = 80
+KEYBOARD_CONTROL_FORCE = 2500
 
 BACKGROUND_COLOR = (25, 30, 30)
 DARK_GREY = (60, 60, 70)
@@ -28,6 +29,7 @@ POINT_COLOR = (240, 220, 120)
 SELECTED_POINT_COLOR = (255, 100, 100)
 BONE_COLOR = (220, 220, 230)
 PULL_LINE_COLOR = (255, 120, 120)
+TEXT_COLOR = (230, 230, 230)
 
 
 class Point:
@@ -76,6 +78,15 @@ class Point:
             self.radius,
         )
 
+        if is_selected:
+            pygame.draw.circle(
+                screen,
+                SELECTED_POINT_COLOR,
+                (int(self.position.x), int(self.position.y)),
+                self.radius + 5,
+                2,
+            )
+
 
 class Bone:
     def __init__(self, point_a, point_b, length):
@@ -123,6 +134,20 @@ def create_ragdoll():
     right_knee = Point(275, 280, 5)
     right_foot = Point(290, 350, 5)
 
+    point_labels = [
+        "Head",
+        "Chest",
+        "Pelvis",
+        "Left Elbow",
+        "Left Hand",
+        "Right Elbow",
+        "Right Hand",
+        "Left Knee",
+        "Left Foot",
+        "Right Knee",
+        "Right Foot",
+    ]
+
     points = [
         head,
         chest,
@@ -154,7 +179,7 @@ def create_ragdoll():
         Bone(right_knee, right_foot, 70),
     ]
 
-    return points, bones
+    return points, bones, point_labels
 
 
 def draw_world(screen):
@@ -175,25 +200,48 @@ def draw_world(screen):
     )
 
 
-def find_nearest_point(points, mouse_position):
+def find_nearest_point_index(points, mouse_position):
     mouse_vector = pygame.Vector2(mouse_position)
 
-    nearest_point = None
+    nearest_index = None
     nearest_distance = SELECT_RADIUS
 
-    for point in points:
+    for index, point in enumerate(points):
         distance = point.position.distance_to(mouse_vector)
 
         if distance < nearest_distance:
-            nearest_point = point
+            nearest_index = index
             nearest_distance = distance
 
-    return nearest_point
+    return nearest_index
 
 
-def apply_mouse_pull(selected_point):
-    if selected_point is None:
+def get_selected_index_from_key(event_key):
+    key_to_index = {
+        pygame.K_1: 0,      # Head
+        pygame.K_2: 1,      # Chest
+        pygame.K_3: 2,      # Pelvis
+        pygame.K_4: 3,      # Left Elbow
+        pygame.K_5: 4,      # Left Hand
+        pygame.K_6: 5,      # Right Elbow
+        pygame.K_7: 6,      # Right Hand
+        pygame.K_8: 7,      # Left Knee
+        pygame.K_9: 8,      # Left Foot
+        pygame.K_0: 9,      # Right Knee
+        pygame.K_MINUS: 10, # Right Foot
+    }
+
+    return key_to_index.get(event_key)
+
+
+def apply_mouse_pull(points, selected_index, is_mouse_dragging):
+    if selected_index is None:
         return
+
+    if not is_mouse_dragging:
+        return
+
+    selected_point = points[selected_index]
 
     mouse_position = pygame.Vector2(pygame.mouse.get_pos())
     direction = mouse_position - selected_point.position
@@ -201,14 +249,46 @@ def apply_mouse_pull(selected_point):
     selected_point.apply_force(direction * PULL_FORCE)
 
 
-def update_physics(points, bones, gravity_force, dt, selected_point):
+def apply_keyboard_control(points, selected_index):
+    if selected_index is None:
+        return
+
+    selected_point = points[selected_index]
+
+    keys = pygame.key.get_pressed()
+    force = pygame.Vector2(0, 0)
+
+    if keys[pygame.K_LEFT]:
+        force.x -= KEYBOARD_CONTROL_FORCE
+
+    if keys[pygame.K_RIGHT]:
+        force.x += KEYBOARD_CONTROL_FORCE
+
+    if keys[pygame.K_UP]:
+        force.y -= KEYBOARD_CONTROL_FORCE
+
+    if keys[pygame.K_DOWN]:
+        force.y += KEYBOARD_CONTROL_FORCE
+
+    selected_point.apply_force(force)
+
+
+def update_physics(
+    points,
+    bones,
+    gravity_force,
+    dt,
+    selected_index,
+    is_mouse_dragging,
+):
     sub_dt = dt / SUBSTEPS
 
     for _ in range(SUBSTEPS):
         for point in points:
             point.apply_force(gravity_force)
 
-        apply_mouse_pull(selected_point)
+        apply_mouse_pull(points, selected_index, is_mouse_dragging)
+        apply_keyboard_control(points, selected_index)
 
         for point in points:
             point.update(sub_dt)
@@ -221,10 +301,14 @@ def update_physics(points, bones, gravity_force, dt, selected_point):
                 point.solve_world_collision()
 
 
-def draw_pull_line(screen, selected_point):
-    if selected_point is None:
+def draw_pull_line(screen, points, selected_index, is_mouse_dragging):
+    if selected_index is None:
         return
 
+    if not is_mouse_dragging:
+        return
+
+    selected_point = points[selected_index]
     mouse_position = pygame.mouse.get_pos()
 
     pygame.draw.line(
@@ -236,25 +320,46 @@ def draw_pull_line(screen, selected_point):
     )
 
 
-def draw_ragdoll(screen, points, bones, selected_point):
+def draw_ragdoll(screen, points, bones, selected_index):
     for bone in bones:
         bone.draw(screen)
 
-    for point in points:
-        is_selected = point is selected_point
+    for index, point in enumerate(points):
+        is_selected = index == selected_index
         point.draw(screen, is_selected)
+
+
+def draw_text(screen, font, text, x, y):
+    text_surface = font.render(text, True, TEXT_COLOR)
+    screen.blit(text_surface, (x, y))
+
+
+def draw_ui(screen, font, selected_index, point_labels):
+    if selected_index is None:
+        selected_text = "Selected: None"
+    else:
+        selected_text = f"Selected: {point_labels[selected_index]}"
+
+    draw_text(screen, font, selected_text, 10, 10)
+    draw_text(screen, font, "Mouse: click and drag a point", 10, 30)
+    draw_text(screen, font, "Keys 1-0, -: select point", 10, 50)
+    draw_text(screen, font, "Arrows: apply force to selected point", 10, 70)
+    draw_text(screen, font, "R: reset", 10, 90)
 
 
 def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 11: Select and Pull Points")
+    pygame.display.set_caption("Stage 12: Keyboard Control")
 
     clock = pygame.time.Clock()
+    font = pygame.font.SysFont("arial", 16)
 
-    points, bones = create_ragdoll()
-    selected_point = None
+    points, bones, point_labels = create_ragdoll()
+
+    selected_index = 0
+    is_mouse_dragging = False
 
     gravity_force = pygame.Vector2(0, GRAVITY_Y)
 
@@ -268,22 +373,40 @@ def main():
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if event.button == 1:
-                    selected_point = find_nearest_point(points, event.pos)
+                    nearest_index = find_nearest_point_index(points, event.pos)
+
+                    if nearest_index is not None:
+                        selected_index = nearest_index
+                        is_mouse_dragging = True
 
             if event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
-                    selected_point = None
+                    is_mouse_dragging = False
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
-                    points, bones = create_ragdoll()
-                    selected_point = None
+                    points, bones, point_labels = create_ragdoll()
+                    selected_index = 0
+                    is_mouse_dragging = False
 
-        update_physics(points, bones, gravity_force, dt, selected_point)
+                new_selected_index = get_selected_index_from_key(event.key)
+
+                if new_selected_index is not None:
+                    selected_index = new_selected_index
+
+        update_physics(
+            points,
+            bones,
+            gravity_force,
+            dt,
+            selected_index,
+            is_mouse_dragging,
+        )
 
         draw_world(screen)
-        draw_pull_line(screen, selected_point)
-        draw_ragdoll(screen, points, bones, selected_point)
+        draw_pull_line(screen, points, selected_index, is_mouse_dragging)
+        draw_ragdoll(screen, points, bones, selected_index)
+        draw_ui(screen, font, selected_index, point_labels)
 
         pygame.display.update()
 
