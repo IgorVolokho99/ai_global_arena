@@ -29,11 +29,17 @@ POINT_COLOR = (240, 220, 120)
 SELECTED_POINT_COLOR = (255, 100, 100)
 BONE_COLOR = (220, 220, 230)
 PULL_LINE_COLOR = (255, 120, 120)
+
 TEXT_COLOR = (230, 230, 230)
+DEBUG_TEXT_COLOR = (170, 220, 255)
+FALLEN_TEXT_COLOR = (255, 120, 120)
+STANDING_TEXT_COLOR = (120, 255, 160)
 
 
 class Point:
-    def __init__(self, x, y, radius):
+    def __init__(self, name, x, y, radius):
+        self.name = name
+
         self.position = pygame.Vector2(x, y)
         self.velocity = pygame.Vector2(0, 0)
         self.acceleration = pygame.Vector2(0, 0)
@@ -118,35 +124,21 @@ class Bone:
 
 
 def create_ragdoll():
-    head = Point(250, 100, 5)
-    chest = Point(250, 150, 5)
-    pelvis = Point(250, 210, 5)
+    head = Point("Head", 250, 100, 5)
+    chest = Point("Chest", 250, 150, 5)
+    pelvis = Point("Pelvis", 250, 210, 5)
 
-    left_elbow = Point(215, 165, 5)
-    left_hand = Point(190, 205, 5)
+    left_elbow = Point("Left Elbow", 215, 165, 5)
+    left_hand = Point("Left Hand", 190, 205, 5)
 
-    right_elbow = Point(285, 165, 5)
-    right_hand = Point(310, 205, 5)
+    right_elbow = Point("Right Elbow", 285, 165, 5)
+    right_hand = Point("Right Hand", 310, 205, 5)
 
-    left_knee = Point(225, 280, 5)
-    left_foot = Point(210, 350, 5)
+    left_knee = Point("Left Knee", 225, 280, 5)
+    left_foot = Point("Left Foot", 210, 350, 5)
 
-    right_knee = Point(275, 280, 5)
-    right_foot = Point(290, 350, 5)
-
-    point_labels = [
-        "Head",
-        "Chest",
-        "Pelvis",
-        "Left Elbow",
-        "Left Hand",
-        "Right Elbow",
-        "Right Hand",
-        "Left Knee",
-        "Left Foot",
-        "Right Knee",
-        "Right Foot",
-    ]
+    right_knee = Point("Right Knee", 275, 280, 5)
+    right_foot = Point("Right Foot", 290, 350, 5)
 
     points = [
         head,
@@ -179,7 +171,7 @@ def create_ragdoll():
         Bone(right_knee, right_foot, 70),
     ]
 
-    return points, bones, point_labels
+    return points, bones
 
 
 def draw_world(screen):
@@ -218,17 +210,17 @@ def find_nearest_point_index(points, mouse_position):
 
 def get_selected_index_from_key(event_key):
     key_to_index = {
-        pygame.K_1: 0,      # Head
-        pygame.K_2: 1,      # Chest
-        pygame.K_3: 2,      # Pelvis
-        pygame.K_4: 3,      # Left Elbow
-        pygame.K_5: 4,      # Left Hand
-        pygame.K_6: 5,      # Right Elbow
-        pygame.K_7: 6,      # Right Hand
-        pygame.K_8: 7,      # Left Knee
-        pygame.K_9: 8,      # Left Foot
-        pygame.K_0: 9,      # Right Knee
-        pygame.K_MINUS: 10, # Right Foot
+        pygame.K_1: 0,       # Head
+        pygame.K_2: 1,       # Chest
+        pygame.K_3: 2,       # Pelvis
+        pygame.K_4: 3,       # Left Elbow
+        pygame.K_5: 4,       # Left Hand
+        pygame.K_6: 5,       # Right Elbow
+        pygame.K_7: 6,       # Right Hand
+        pygame.K_8: 7,       # Left Knee
+        pygame.K_9: 8,       # Left Foot
+        pygame.K_0: 9,       # Right Knee
+        pygame.K_MINUS: 10,  # Right Foot
     }
 
     return key_to_index.get(event_key)
@@ -301,6 +293,37 @@ def update_physics(
                 point.solve_world_collision()
 
 
+def get_body_metrics(points):
+    head = points[0]
+    chest = points[1]
+    pelvis = points[2]
+
+    head_height = FLOOR_Y - head.position.y
+    pelvis_height = FLOOR_Y - pelvis.position.y
+
+    torso_vector = pelvis.position - chest.position
+
+    if torso_vector.length() == 0:
+        torso_angle = 0
+    else:
+        torso_angle = torso_vector.angle_to(pygame.Vector2(0, 1))
+
+    is_fallen = False
+
+    if head.position.y > pelvis.position.y - 20:
+        is_fallen = True
+
+    if head.position.y > FLOOR_Y - 40:
+        is_fallen = True
+
+    return {
+        "head_height": head_height,
+        "pelvis_height": pelvis_height,
+        "torso_angle": torso_angle,
+        "is_fallen": is_fallen,
+    }
+
+
 def draw_pull_line(screen, points, selected_index, is_mouse_dragging):
     if selected_index is None:
         return
@@ -329,43 +352,151 @@ def draw_ragdoll(screen, points, bones, selected_index):
         point.draw(screen, is_selected)
 
 
-def draw_text(screen, font, text, x, y):
-    text_surface = font.render(text, True, TEXT_COLOR)
+def draw_joint_labels(screen, font, points):
+    for index, point in enumerate(points):
+        label = f"{index}: {point.name}"
+
+        text_surface = font.render(label, True, DEBUG_TEXT_COLOR)
+
+        screen.blit(
+            text_surface,
+            (
+                int(point.position.x) + 8,
+                int(point.position.y) - 8,
+            ),
+        )
+
+
+def draw_text(screen, font, text, x, y, color=TEXT_COLOR):
+    text_surface = font.render(text, True, color)
     screen.blit(text_surface, (x, y))
 
 
-def draw_ui(screen, font, selected_index, point_labels):
+def draw_ui(
+    screen,
+    font,
+    points,
+    selected_index,
+    is_showing_labels,
+    time_alive,
+    current_fps,
+):
+    metrics = get_body_metrics(points)
+
     if selected_index is None:
         selected_text = "Selected: None"
     else:
-        selected_text = f"Selected: {point_labels[selected_index]}"
+        selected_point = points[selected_index]
+        selected_text = f"Selected: {selected_index} - {selected_point.name}"
+
+    if metrics["is_fallen"]:
+        status_text = "Status: Fallen"
+        status_color = FALLEN_TEXT_COLOR
+    else:
+        status_text = "Status: Standing"
+        status_color = STANDING_TEXT_COLOR
 
     draw_text(screen, font, selected_text, 10, 10)
-    draw_text(screen, font, "Mouse: click and drag a point", 10, 30)
-    draw_text(screen, font, "Keys 1-0, -: select point", 10, 50)
-    draw_text(screen, font, "Arrows: apply force to selected point", 10, 70)
-    draw_text(screen, font, "R: reset", 10, 90)
+    draw_text(screen, font, status_text, 10, 30, status_color)
+
+    draw_text(
+        screen,
+        font,
+        f"Time alive: {time_alive:.2f}s",
+        10,
+        50,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Head height: {metrics['head_height']:.1f}",
+        10,
+        70,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Pelvis height: {metrics['pelvis_height']:.1f}",
+        10,
+        90,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"Torso angle: {metrics['torso_angle']:.1f}",
+        10,
+        110,
+        DEBUG_TEXT_COLOR,
+    )
+
+    draw_text(
+        screen,
+        font,
+        f"FPS: {current_fps:.0f}",
+        10,
+        130,
+        DEBUG_TEXT_COLOR,
+    )
+
+    if selected_index is not None:
+        selected_point = points[selected_index]
+
+        draw_text(
+            screen,
+            font,
+            f"Position: ({selected_point.position.x:.1f}, {selected_point.position.y:.1f})",
+            10,
+            150,
+            DEBUG_TEXT_COLOR,
+        )
+
+        draw_text(
+            screen,
+            font,
+            f"Velocity: ({selected_point.velocity.x:.1f}, {selected_point.velocity.y:.1f})",
+            10,
+            170,
+            DEBUG_TEXT_COLOR,
+        )
+
+    draw_text(screen, font, "Mouse: click and drag point", 10, 400)
+    draw_text(screen, font, "Keys 1-0, -: select point", 10, 420)
+    draw_text(screen, font, "Arrows: apply force", 10, 440)
+    draw_text(screen, font, "R: reset | L: labels on/off", 10, 460)
+
+    if is_showing_labels:
+        draw_joint_labels(screen, font, points)
 
 
 def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 12: Keyboard Control")
+    pygame.display.set_caption("Stage 13: Debug Overlay and Body Metrics")
 
     clock = pygame.time.Clock()
-    font = pygame.font.SysFont("arial", 16)
+    font = pygame.font.SysFont("arial", 14)
 
-    points, bones, point_labels = create_ragdoll()
+    points, bones = create_ragdoll()
 
     selected_index = 0
     is_mouse_dragging = False
+    is_showing_labels = True
+
+    time_alive = 0
 
     gravity_force = pygame.Vector2(0, GRAVITY_Y)
 
     running = True
     while running:
         dt = clock.tick(FPS) / 1000
+        current_fps = clock.get_fps()
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -385,9 +516,13 @@ def main():
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
-                    points, bones, point_labels = create_ragdoll()
+                    points, bones = create_ragdoll()
                     selected_index = 0
                     is_mouse_dragging = False
+                    time_alive = 0
+
+                if event.key == pygame.K_l:
+                    is_showing_labels = not is_showing_labels
 
                 new_selected_index = get_selected_index_from_key(event.key)
 
@@ -403,10 +538,24 @@ def main():
             is_mouse_dragging,
         )
 
+        metrics = get_body_metrics(points)
+
+        if not metrics["is_fallen"]:
+            time_alive += dt
+
         draw_world(screen)
         draw_pull_line(screen, points, selected_index, is_mouse_dragging)
         draw_ragdoll(screen, points, bones, selected_index)
-        draw_ui(screen, font, selected_index, point_labels)
+
+        draw_ui(
+            screen,
+            font,
+            points,
+            selected_index,
+            is_showing_labels,
+            time_alive,
+            current_fps,
+        )
 
         pygame.display.update()
 
