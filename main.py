@@ -7,9 +7,22 @@ FLOOR_Y = 450
 
 FPS = 60
 
+GRAVITY_Y = 900
+
+DAMPING = 0.995
+
+SUBSTEPS = 3
+CONSTRAINT_ITERATIONS = 8
+
+LEFT_WALL_X = 0
+RIGHT_WALL_X = SCREEN_WIDTH
+
 BACKGROUND_COLOR = (25, 30, 30)
 DARK_GREY = (60, 60, 70)
 LINE_COLOR = (200, 200, 200)
+
+POINT_COLOR = (240, 220, 120)
+BONE_COLOR = (220, 220, 230)
 
 
 class Point:
@@ -25,19 +38,33 @@ class Point:
 
     def update(self, dt):
         self.velocity += self.acceleration * dt
+        self.velocity *= DAMPING
+
         self.position += self.velocity * dt
+
         self.acceleration *= 0
 
-    def solve_floor_collision(self):
+    def solve_world_collision(self):
         if self.position.y + self.radius > FLOOR_Y:
             self.position.y = FLOOR_Y - self.radius
-            self.velocity.y *= -0.8
+            self.velocity.y *= -0.4
             self.velocity.x *= 0.9
+
+            if abs(self.velocity.y) < 20:
+                self.velocity.y = 0
+
+        if self.position.x - self.radius < LEFT_WALL_X:
+            self.position.x = LEFT_WALL_X + self.radius
+            self.velocity.x *= -0.4
+
+        if self.position.x + self.radius > RIGHT_WALL_X:
+            self.position.x = RIGHT_WALL_X - self.radius
+            self.velocity.x *= -0.4
 
     def draw(self, screen):
         pygame.draw.circle(
             screen,
-            (240, 220, 120),
+            POINT_COLOR,
             (int(self.position.x), int(self.position.y)),
             self.radius,
         )
@@ -65,40 +92,14 @@ class Bone:
     def draw(self, screen):
         pygame.draw.line(
             screen,
-            (220, 220, 230),
+            BONE_COLOR,
             self.point_a.position,
             self.point_b.position,
             4,
         )
 
 
-def draw_world(screen):
-    screen.fill(BACKGROUND_COLOR)
-
-    pygame.draw.rect(
-        screen,
-        DARK_GREY,
-        pygame.Rect(0, FLOOR_Y, SCREEN_WIDTH, SCREEN_HEIGHT - FLOOR_Y),
-    )
-
-    pygame.draw.line(
-        screen,
-        LINE_COLOR,
-        (0, FLOOR_Y),
-        (SCREEN_WIDTH, FLOOR_Y),
-        2,
-    )
-
-
-
-def main():
-    pygame.init()
-
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 9: Simple Skeleton")
-
-    clock = pygame.time.Clock()
-
+def create_ragdoll():
     head = Point(250, 100, 5)
     chest = Point(250, 150, 5)
     pelvis = Point(250, 210, 5)
@@ -119,12 +120,10 @@ def main():
         head,
         chest,
         pelvis,
-
         left_elbow,
         left_hand,
         right_elbow,
         right_hand,
-
         left_knee,
         left_foot,
         right_knee,
@@ -148,7 +147,62 @@ def main():
         Bone(right_knee, right_foot, 70),
     ]
 
-    gravity_force = pygame.Vector2(0, 900)
+    return points, bones
+
+
+def draw_world(screen):
+    screen.fill(BACKGROUND_COLOR)
+
+    pygame.draw.rect(
+        screen,
+        DARK_GREY,
+        pygame.Rect(0, FLOOR_Y, SCREEN_WIDTH, SCREEN_HEIGHT - FLOOR_Y),
+    )
+
+    pygame.draw.line(
+        screen,
+        LINE_COLOR,
+        (0, FLOOR_Y),
+        (SCREEN_WIDTH, FLOOR_Y),
+        2,
+    )
+
+
+def update_physics(points, bones, gravity_force, dt):
+    sub_dt = dt / SUBSTEPS
+
+    for _ in range(SUBSTEPS):
+        for point in points:
+            point.apply_force(gravity_force)
+            point.update(sub_dt)
+
+        for _ in range(CONSTRAINT_ITERATIONS):
+            for bone in bones:
+                bone.solve()
+
+            for point in points:
+                point.solve_world_collision()
+
+
+def draw_ragdoll(screen, points, bones):
+    for bone in bones:
+        bone.draw(screen)
+
+    for point in points:
+        point.draw(screen)
+
+
+def main():
+    pygame.init()
+
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption("Stage 10: Stable Ragdoll Physics")
+
+    clock = pygame.time.Clock()
+
+    points, bones = create_ragdoll()
+
+    gravity_force = pygame.Vector2(0, GRAVITY_Y)
 
     running = True
     while running:
@@ -158,28 +212,15 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
 
-        for point in points:
-            point.apply_force(gravity_force)
-            point.update(dt)
-
-        for _ in range(8):
-            for bone in bones:
-                bone.solve()
-
-        for point in points:
-            point.solve_floor_collision()
+        update_physics(points, bones, gravity_force, dt)
 
         draw_world(screen)
-
-        for bone in bones:
-            bone.draw(screen)
-
-        for point in points:
-            point.draw(screen)
+        draw_ragdoll(screen, points, bones)
 
         pygame.display.update()
 
     pygame.quit()
 
 
-main()
+if __name__ == "__main__":
+    main()
