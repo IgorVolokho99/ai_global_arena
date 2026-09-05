@@ -17,12 +17,17 @@ CONSTRAINT_ITERATIONS = 8
 LEFT_WALL_X = 0
 RIGHT_WALL_X = SCREEN_WIDTH
 
+SELECT_RADIUS = 25
+PULL_FORCE = 80
+
 BACKGROUND_COLOR = (25, 30, 30)
 DARK_GREY = (60, 60, 70)
 LINE_COLOR = (200, 200, 200)
 
 POINT_COLOR = (240, 220, 120)
+SELECTED_POINT_COLOR = (255, 100, 100)
 BONE_COLOR = (220, 220, 230)
+PULL_LINE_COLOR = (255, 120, 120)
 
 
 class Point:
@@ -61,10 +66,12 @@ class Point:
             self.position.x = RIGHT_WALL_X - self.radius
             self.velocity.x *= -0.4
 
-    def draw(self, screen):
+    def draw(self, screen, is_selected=False):
+        color = SELECTED_POINT_COLOR if is_selected else POINT_COLOR
+
         pygame.draw.circle(
             screen,
-            POINT_COLOR,
+            color,
             (int(self.position.x), int(self.position.y)),
             self.radius,
         )
@@ -168,12 +175,42 @@ def draw_world(screen):
     )
 
 
-def update_physics(points, bones, gravity_force, dt):
+def find_nearest_point(points, mouse_position):
+    mouse_vector = pygame.Vector2(mouse_position)
+
+    nearest_point = None
+    nearest_distance = SELECT_RADIUS
+
+    for point in points:
+        distance = point.position.distance_to(mouse_vector)
+
+        if distance < nearest_distance:
+            nearest_point = point
+            nearest_distance = distance
+
+    return nearest_point
+
+
+def apply_mouse_pull(selected_point):
+    if selected_point is None:
+        return
+
+    mouse_position = pygame.Vector2(pygame.mouse.get_pos())
+    direction = mouse_position - selected_point.position
+
+    selected_point.apply_force(direction * PULL_FORCE)
+
+
+def update_physics(points, bones, gravity_force, dt, selected_point):
     sub_dt = dt / SUBSTEPS
 
     for _ in range(SUBSTEPS):
         for point in points:
             point.apply_force(gravity_force)
+
+        apply_mouse_pull(selected_point)
+
+        for point in points:
             point.update(sub_dt)
 
         for _ in range(CONSTRAINT_ITERATIONS):
@@ -184,23 +221,40 @@ def update_physics(points, bones, gravity_force, dt):
                 point.solve_world_collision()
 
 
-def draw_ragdoll(screen, points, bones):
+def draw_pull_line(screen, selected_point):
+    if selected_point is None:
+        return
+
+    mouse_position = pygame.mouse.get_pos()
+
+    pygame.draw.line(
+        screen,
+        PULL_LINE_COLOR,
+        selected_point.position,
+        mouse_position,
+        2,
+    )
+
+
+def draw_ragdoll(screen, points, bones, selected_point):
     for bone in bones:
         bone.draw(screen)
 
     for point in points:
-        point.draw(screen)
+        is_selected = point is selected_point
+        point.draw(screen, is_selected)
 
 
 def main():
     pygame.init()
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-    pygame.display.set_caption("Stage 10: Stable Ragdoll Physics")
+    pygame.display.set_caption("Stage 11: Select and Pull Points")
 
     clock = pygame.time.Clock()
 
     points, bones = create_ragdoll()
+    selected_point = None
 
     gravity_force = pygame.Vector2(0, GRAVITY_Y)
 
@@ -212,10 +266,24 @@ def main():
             if event.type == pygame.QUIT:
                 running = False
 
-        update_physics(points, bones, gravity_force, dt)
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    selected_point = find_nearest_point(points, event.pos)
+
+            if event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:
+                    selected_point = None
+
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_r:
+                    points, bones = create_ragdoll()
+                    selected_point = None
+
+        update_physics(points, bones, gravity_force, dt, selected_point)
 
         draw_world(screen)
-        draw_ragdoll(screen, points, bones)
+        draw_pull_line(screen, selected_point)
+        draw_ragdoll(screen, points, bones, selected_point)
 
         pygame.display.update()
 
